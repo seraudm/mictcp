@@ -1,11 +1,40 @@
 #include <mictcp.h>
 #include <api/mictcp_core.h>
 
+#define WINDOW_SIZE 100
 
 mic_tcp_sock mon_socket;
 
+int index_window;
+char *loss_rate_window; //1 is a loss, 0 is a success
+char allowed_rate_loss = 0; //it's a percentage
+
 char PE = 0;
 char PA = 0;
+
+void initialize_window(){
+    loss_rate_window = malloc(sizeof(char) * WINDOW_SIZE);
+    for (int i=0; i< WINDOW_SIZE; i++){
+        loss_rate_window[i] = 1;
+    }
+}
+
+void push_value_window(char value){
+    loss_rate_window[index_window] = value;
+    index_window = (index_window + 1) % WINDOW_SIZE;
+}
+
+char is_loss_allowed(){
+    int number_loss_in_window = 1; //we make as if we have added a loss
+    for(int i=0; i<WINDOW_SIZE; i++){
+        number_loss_in_window += loss_rate_window[i];
+    }
+    number_loss_in_window -= loss_rate_window[index_window];
+    float loss_rate = ((float)number_loss_in_window)/WINDOW_SIZE;
+    printf("nb loss: %d, loss_rate: %f", number_loss_in_window, loss_rate);
+    return loss_rate <= (float) allowed_rate_loss/100; 
+}
+
 
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
@@ -16,7 +45,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(0);
+   set_loss_rate(5);
    mon_socket.local_addr.ip_addr.addr = "127.0.0.1";
    mon_socket.local_addr.ip_addr.addr_size = strlen(mon_socket.local_addr.ip_addr.addr) + 1;
    mon_socket.local_addr.port = 33000;
@@ -41,6 +70,8 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
  */
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
+    initialize_window();
+    index_window = 0;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     return 0;
 }
@@ -51,6 +82,8 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
  */
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
+    initialize_window();
+    index_window = 0;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     mon_socket.remote_addr = addr;
     return 0;
@@ -72,7 +105,6 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.header.seq_num = PE;
     int size_sent_data = IP_send(pdu, mon_socket.remote_addr.ip_addr);
 
-    PE = (PE +1) %2;
 
     mic_tcp_pdu pdu_received;
     pdu_received.payload.size = 0;
@@ -80,11 +112,20 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     mic_tcp_ip_addr remote_addr;
 
 
-    while(IP_recv(&pdu_received, &local_addr, &remote_addr, 100)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num != PE){
+    while(IP_recv(&pdu_received, &local_addr, &remote_addr, 100)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num == PE){
+        
+        if (is_loss_allowed()){
+            printf("Perte autorisee\n");
+            push_value_window(1); //add a loss
+            return size_sent_data;
+        }
+        printf("Perte refusee\n");
         // printf("Cond 2: %d Cond3: %d Cond 4: %d\n",pdu_received.header.dest_port != mon_socket.local_addr.port,pdu_received.header.ack == 0,pdu_received.header.ack_num != PE);
         // printf("source port: %d dest port: %d ack: %d\n",pdu.header.source_port, pdu.header.dest_port, pdu.header.ack);
         size_sent_data = IP_send(pdu, mon_socket.remote_addr.ip_addr);
     }
+    push_value_window(0); //add a success
+    PE = (PE +1) %2;
 
     return size_sent_data;
 }
