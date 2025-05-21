@@ -3,6 +3,10 @@
 
 
 mic_tcp_sock mon_socket;
+
+char PE = 0;
+char PA = 0;
+
 /*
  * Permet de créer un socket entre l’application et MIC-TCP
  * Retourne le descripteur du socket ou bien -1 en cas d'erreur
@@ -15,7 +19,7 @@ int mic_tcp_socket(start_mode sm)
    set_loss_rate(0);
    mon_socket.local_addr.ip_addr.addr = "127.0.0.1";
    mon_socket.local_addr.ip_addr.addr_size = strlen(mon_socket.local_addr.ip_addr.addr) + 1;
-   mon_socket.local_addr.port = 32000;
+   mon_socket.local_addr.port = 33000;
 
    return result;
 }
@@ -64,10 +68,25 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     pdu.payload.size = mesg_size;
     pdu.header.source_port = mon_socket.local_addr.port;
     pdu.header.dest_port = mon_socket.remote_addr.port;
-    IP_send(pdu, mon_socket.remote_addr.ip_addr);
+    pdu.header.ack = 0;
+    pdu.header.seq_num = PE;
+    int size_sent_data = IP_send(pdu, mon_socket.remote_addr.ip_addr);
+
+    PE = (PE +1) %2;
+
+    mic_tcp_pdu pdu_received;
+    pdu_received.payload.size = 0;
+    mic_tcp_ip_addr local_addr;
+    mic_tcp_ip_addr remote_addr;
 
 
-    return 0;
+    while(IP_recv(&pdu_received, &local_addr, &remote_addr, 100)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num != PE){
+        // printf("Cond 2: %d Cond3: %d Cond 4: %d\n",pdu_received.header.dest_port != mon_socket.local_addr.port,pdu_received.header.ack == 0,pdu_received.header.ack_num != PE);
+        // printf("source port: %d dest port: %d ack: %d\n",pdu.header.source_port, pdu.header.dest_port, pdu.header.ack);
+        size_sent_data = IP_send(pdu, mon_socket.remote_addr.ip_addr);
+    }
+
+    return size_sent_data;
 }
 
 /*
@@ -107,6 +126,18 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if (pdu.header.dest_port == mon_socket.local_addr.port){
-        app_buffer_put(pdu.payload);
+        if (pdu.header.ack == 0 || (pdu.header.ack == 1 && pdu.header.syn == 1)){
+            if (pdu.header.seq_num == PA){
+                app_buffer_put(pdu.payload);
+                PA = (PA +1)%2;
+            }
+            mic_tcp_pdu pdu_ack;
+            pdu_ack.header.source_port = mon_socket.local_addr.port;
+            pdu_ack.header.dest_port = pdu.header.source_port;
+            pdu_ack.header.ack_num = PA;
+            pdu_ack.header.ack = 1;
+            // printf("source port: %d dest port: %d ack_num: %d ack: %d\n",pdu_ack.header.source_port, pdu_ack.header.dest_port, pdu_ack.header.ack_num, pdu_ack.header.ack);
+            IP_send(pdu_ack, remote_addr); //a voir si c'est pas local addr
+        }
     }
 }
