@@ -167,7 +167,7 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
 {
     printf("[MIC-TCP] Appel de la fonction: "); printf(__FUNCTION__); printf("\n");
     if (pdu.header.dest_port == mon_socket.local_addr.port){
-        if (pdu.header.ack == 0 || (pdu.header.ack == 1 && pdu.header.syn == 1)){
+        if (pdu.header.ack == 0){
             if (pdu.header.seq_num == PA){
                 app_buffer_put(pdu.payload);
                 PA = (PA +1)%2;
