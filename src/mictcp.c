@@ -2,12 +2,13 @@
 #include <api/mictcp_core.h>
 
 #define WINDOW_SIZE 100
+#define TIMER 10
 
 mic_tcp_sock mon_socket;
 
 int index_window;
 char *loss_rate_window; //1 is a loss, 0 is a success
-char allowed_rate_loss = 0; //it's a percentage
+char allowed_rate_loss; //it's a percentage
 pthread_mutex_t mutex_sync = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
@@ -15,6 +16,7 @@ char PE = 0;
 char PA = 0;
 
 void initialize_window(){
+    index_window = 0;
     loss_rate_window = malloc(sizeof(char) * WINDOW_SIZE);
     for (int i=0; i< WINDOW_SIZE; i++){
         loss_rate_window[i] = 1;
@@ -47,7 +49,7 @@ int mic_tcp_socket(start_mode sm)
    int result = -1;
    printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
    result = initialize_components(sm); /* Appel obligatoire */
-   set_loss_rate(5);
+   set_loss_rate(20);
    mon_socket.local_addr.ip_addr.addr = "127.0.0.1";
    mon_socket.local_addr.ip_addr.addr_size = strlen(mon_socket.local_addr.ip_addr.addr) + 1;
    mon_socket.local_addr.port = 33000;
@@ -74,11 +76,23 @@ int mic_tcp_bind(int socket, mic_tcp_sock_addr addr)
 int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 {
     initialize_window();
-    index_window = 0;
+    allowed_rate_loss = 10;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     mon_socket.state = SYN_RECEIVED;
-    pthread_mutex_lock(&mutex_sync);
-    pthread_cond_wait(&cond, &mutex_sync);
+
+    if (pthread_mutex_lock(&mutex_sync)){
+        printf("Erreur lors du lock\n");
+        exit(-1);
+    }
+
+    pthread_cond_wait(&cond, &mutex_sync); //On attend la fin de la phase de connexion
+
+    if (pthread_mutex_unlock(&mutex_sync)){
+        printf("Erreur lors du unlock\n");
+        exit(-1);
+    }
+    
+    printf("allowed loss rate: %d\n", allowed_rate_loss);
     return 0;
 }
 
@@ -89,34 +103,40 @@ int mic_tcp_accept(int socket, mic_tcp_sock_addr* addr)
 int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 {
     initialize_window();
-    index_window = 0;
+    allowed_rate_loss = 5;
     printf("[MIC-TCP] Appel de la fonction: ");  printf(__FUNCTION__); printf("\n");
     mon_socket.remote_addr = addr;
     mic_tcp_pdu pdu_syn;
     pdu_syn.header.source_port = mon_socket.local_addr.port;
     pdu_syn.header.dest_port = mon_socket.remote_addr.port;
     pdu_syn.header.syn = 1;
-    int size_sent_data = IP_send(pdu_syn, mon_socket.remote_addr.ip_addr);
+    pdu_syn.payload.data = malloc(sizeof(char));
+    *(pdu_syn.payload.data) = allowed_rate_loss;
+    pdu_syn.payload.size = 1;
+    IP_send(pdu_syn, mon_socket.remote_addr.ip_addr);
 
     mic_tcp_pdu pdu_received;
-    pdu_received.payload.size = 0;
+    pdu_received.payload.size = 1;
+    pdu_received.payload.data = malloc(sizeof(char));
     mic_tcp_ip_addr local_addr;
-    mic_tcp_ip_addr remote_addr;
+    local_addr.addr_size = 16;
 
-    while(IP_recv(&pdu_received, &local_addr, &remote_addr, 100)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.syn == 0){
+    while(IP_recv(&pdu_received, &local_addr, &mon_socket.remote_addr.ip_addr, TIMER) == -1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.syn == 0){
         // printf("Cond 2: %d Cond3: %d Cond 4: %d\n",pdu_received.header.dest_port != mon_socket.local_addr.port,pdu_received.header.ack == 0,pdu_received.header.ack_num != PE);
         // printf("source port: %d dest port: %d ack: %d\n",pdu.header.source_port, pdu.header.dest_port, pdu.header.ack);
-        size_sent_data = IP_send(pdu_syn, mon_socket.remote_addr.ip_addr);
+        IP_send(pdu_syn, mon_socket.remote_addr.ip_addr);
     }
+    allowed_rate_loss = *(pdu_received.payload.data);
 
     mic_tcp_pdu pdu_ack;
     pdu_ack.header.source_port = mon_socket.local_addr.port;
     pdu_ack.header.dest_port = mon_socket.remote_addr.port;
     pdu_ack.header.ack = 1;
-    int size_sent_data = IP_send(pdu_ack, mon_socket.remote_addr.ip_addr);
+    pdu_ack.payload.size = 0;
+    IP_send(pdu_ack, mon_socket.remote_addr.ip_addr);
     
 
-
+    printf("allowed loss rate: %d\n", allowed_rate_loss);
     return 0;
 }
 
@@ -143,10 +163,10 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     mic_tcp_pdu pdu_received;
     pdu_received.payload.size = 0;
     mic_tcp_ip_addr local_addr;
-    mic_tcp_ip_addr remote_addr;
+    local_addr.addr_size = 16;
 
 
-    while(IP_recv(&pdu_received, &local_addr, &remote_addr, 100)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num == PE){
+    while(IP_recv(&pdu_received, &local_addr, &mon_socket.remote_addr.ip_addr, TIMER)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num == PE){
         
         if (is_loss_allowed()){
             printf("Perte autorisee\n");
@@ -213,24 +233,37 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                     pdu_ack.header.dest_port = pdu.header.source_port;
                     pdu_ack.header.ack_num = PA;
                     pdu_ack.header.ack = 1;
+                    pdu_ack.payload.size = 0;
+
                     // printf("source port: %d dest port: %d ack_num: %d ack: %d\n",pdu_ack.header.source_port, pdu_ack.header.dest_port, pdu_ack.header.ack_num, pdu_ack.header.ack);
                     IP_send(pdu_ack, remote_addr); //a voir si c'est pas local addr
                 }
                 break;
             case SYN_RECEIVED:
                 if(pdu.header.syn == 1){
-
                     mon_socket.remote_addr.ip_addr = remote_addr;
                     mon_socket.remote_addr.port = pdu.header.source_port;
 
                     mon_socket.state = SYN_SENT;
-
+                    
+                    char dest_allowed_loss_rate = *(pdu.payload.data);
+                    
                     mic_tcp_pdu pdu_synack;
                     pdu_synack.header.source_port = mon_socket.local_addr.port;
                     pdu_synack.header.dest_port = mon_socket.remote_addr.port;
                     pdu_synack.header.syn = 1;
                     pdu_synack.header.ack = 1;
-                    int size_sent_data = IP_send(pdu_synack, mon_socket.remote_addr.ip_addr);
+                    pdu_synack.payload.data = malloc(sizeof(char));
+
+                    if (allowed_rate_loss < dest_allowed_loss_rate){
+                        *(pdu_synack.payload.data) = allowed_rate_loss;
+                    } else {
+                        allowed_rate_loss = dest_allowed_loss_rate;
+                        *(pdu_synack.payload.data) = dest_allowed_loss_rate;
+                    }
+
+                    pdu_synack.payload.size = 1;
+                    IP_send(pdu_synack, mon_socket.remote_addr.ip_addr);
                     
                 }
                 break;
@@ -241,7 +274,8 @@ void process_received_PDU(mic_tcp_pdu pdu, mic_tcp_ip_addr local_addr, mic_tcp_i
                     pdu_synack.header.dest_port = mon_socket.remote_addr.port;
                     pdu_synack.header.syn = 1;
                     pdu_synack.header.ack = 1;
-                    int size_sent_data = IP_send(pdu_synack, mon_socket.remote_addr.ip_addr);
+                    pdu_synack.payload.size = 0;
+                    IP_send(pdu_synack, mon_socket.remote_addr.ip_addr);
                 }
                 else if (pdu.header.ack == 1){
                     mon_socket.state = ESTABLISHED;

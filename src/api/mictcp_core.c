@@ -129,6 +129,7 @@ int IP_send(mic_tcp_pdu pk, mic_tcp_ip_addr addr)
 
 int IP_recv(mic_tcp_pdu* pk, mic_tcp_ip_addr* local_addr, mic_tcp_ip_addr* remote_addr, unsigned long timeout)
 {
+
     int result = -1;
 
     struct timeval tv;
@@ -161,8 +162,8 @@ int IP_recv(mic_tcp_pdu* pk, mic_tcp_ip_addr* local_addr, mic_tcp_ip_addr* remot
 
         /* Generate a stub address */
         if (remote_addr != NULL) {
-            inet_ntop(AF_INET, &(tmp_addr.sin_addr),remote_addr->addr,remote_addr->addr_size);
-            //remote_addr->addr = "localhost";
+            // inet_ntop(AF_INET, &(tmp_addr.sin_addr),remote_addr->addr,remote_addr->addr_size);
+            remote_addr->addr = "localhost";
             remote_addr->addr_size = strlen(remote_addr->addr) + 1; // don't forget '\0'
         }
 
