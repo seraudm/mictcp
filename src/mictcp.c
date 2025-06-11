@@ -8,7 +8,7 @@ mic_tcp_sock mon_socket;
 
 int index_window;
 char *loss_rate_window; //1 is a loss, 0 is a success
-char allowed_rate_loss; //it's a percentage
+char allowed_rate_loss; //it's a percentage, the value can be modified in accept and connect function
 pthread_mutex_t mutex_sync = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
@@ -141,10 +141,10 @@ int mic_tcp_connect(int socket, mic_tcp_sock_addr addr)
 }
 
 /*
- * Permet de réclamer l’envoi d’une domic_tcp_pdu pdu_received;
+ * Permet de réclamer l’envoi d’une donnée applicative;
     pdu_received.payload.size = 0;
     mic_tcp_ip_addr local_addr;
-    mic_tcp_ip_addr remote_addr;nnée applicative
+    mic_tcp_ip_addr remote_addr;
  * Retourne la taille des données envoyées, et -1 en cas d'erreur
  */
 int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
@@ -169,7 +169,7 @@ int mic_tcp_send (int mic_sock, char* mesg, int mesg_size)
     while(IP_recv(&pdu_received, &local_addr, &mon_socket.remote_addr.ip_addr, TIMER)==-1 || pdu_received.header.dest_port != mon_socket.local_addr.port ||pdu_received.header.ack == 0 || pdu_received.header.ack_num == PE){
         
         if (is_loss_allowed()){
-            printf("Perte autorisee\n");
+            printf("\n==========================\n\nPerte autorisee\n\n==========================\n");
             push_value_window(1); //add a loss
             return size_sent_data;
         }
